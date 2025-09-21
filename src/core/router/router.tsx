@@ -2,15 +2,17 @@ import {
   createBrowserRouter,
   redirect,
   type RouteObject,
-  type LazyRouteFunction,
 } from "react-router";
 import { layouts } from "@/presentation/layouts/layoutsMap";
-
+import type { UserEntity, UserRole } from "@/domain/entities/user/UserEntity";
+import { AuthRepositoryApi } from "@/data/repositories/auth/AuthRepositoryApi";
+import { queryClient } from "../utils/queryClient/queryClient";
 interface RouteMeta {
   path: string;
   auth?: boolean;
-  roles?: string[];
+  roles?: UserRole[];
   layout?: keyof typeof layouts;
+  mainForRole?: UserRole;
 }
 
 const metaModules = import.meta.glob<{ default: RouteMeta }>(
@@ -18,13 +20,9 @@ const metaModules = import.meta.glob<{ default: RouteMeta }>(
   { eager: true }
 );
 
-// Страницы — лениво
 const pageModules = import.meta.glob("@/presentation/views/**/*.page.tsx");
 
-const createLazyRouteFunction = (
-  filePath: string,
-  meta: RouteMeta
-): LazyRouteFunction<RouteObject> => {
+const createLazyComponent = (filePath: string, meta: RouteMeta) => {
   return async () => {
     const mod = await pageModules[filePath]() as { default: React.ComponentType };
     const Component = mod.default;
@@ -36,21 +34,46 @@ const createLazyRouteFunction = (
           <Component />
         </Layout>
       ),
-      loader: meta.auth
-        ? async () => {
-          const token = localStorage.getItem("token");
-          if (!token) throw redirect("/login");
-
-          const user = JSON.parse(localStorage.getItem("user") || "{}");
-          if (meta.roles && !meta.roles.includes(user.role)) {
-            throw redirect("/403");
-          }
-          return null;
-        }
-        : undefined,
     };
   };
 };
+
+const createLoader = (meta: RouteMeta, filePath: string) => {
+  return async () => {
+    let user = queryClient.getQueryData<UserEntity | null>(["currentUser"]);
+
+    if (!user) {
+      const authRepo = new AuthRepositoryApi();
+      user = await authRepo.checkUser();
+      queryClient.setQueryData(["currentUser"], user);
+    }
+
+    if (meta.auth && !user) throw redirect("/login");
+
+    if (user) {
+      localStorage.setItem("userId", user.id);
+
+      if (meta.roles && !meta.roles.includes(user.role)) {
+        throw redirect("/403");
+      }
+
+      if (meta.path === "/") {
+        const mainMetaModule = Object.values(metaModules).find(
+          (m) => m.default.mainForRole === user.role
+        );
+
+        if (mainMetaModule) {
+          throw redirect(mainMetaModule.default.path);
+        }
+        throw redirect("/home");
+      }
+    }
+
+    return null;
+  };
+};
+
+
 
 const routes: RouteObject[] = Object.entries(metaModules)
   .map(([metaPath, metaModule]): RouteObject | null => {
@@ -62,10 +85,10 @@ const routes: RouteObject[] = Object.entries(metaModules)
 
     return {
       path,
-      lazy: createLazyRouteFunction(pagePath, meta),
+      lazy: createLazyComponent(pagePath, meta),
+      loader: createLoader(meta, pagePath),
     } as RouteObject;
   })
   .filter((r): r is RouteObject => r !== null);
-
 
 export const router = createBrowserRouter(routes);
