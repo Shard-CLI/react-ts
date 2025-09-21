@@ -38,7 +38,7 @@ const createLazyComponent = (filePath: string, meta: RouteMeta) => {
   };
 };
 
-const createLoader = (meta: RouteMeta, filePath: string) => {
+const createLoader = (meta: RouteMeta) => {
   return async () => {
     let user = queryClient.getQueryData<UserEntity | null>(["currentUser"]);
 
@@ -86,7 +86,7 @@ const routes: RouteObject[] = Object.entries(metaModules)
     return {
       path,
       lazy: createLazyComponent(pagePath, meta),
-      loader: createLoader(meta, pagePath),
+      loader: createLoader(meta),
     } as RouteObject;
   })
   .filter((r): r is RouteObject => r !== null);
